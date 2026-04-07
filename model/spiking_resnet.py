@@ -8,10 +8,11 @@ class PreActBlock(nn.Module):
     expansion = 1
 
     def __init__(self, in_channels, out_channels, stride, dropout,
-                 neuron: callable = None, bilinear: bool = False, **kwargs):
+                 neuron: callable = None, bilinear: bool = False, bilinear_cfg: dict = None, **kwargs):
         super(PreActBlock, self).__init__()
         whether_bias = True
         self.bilinear = bilinear
+        self.bilinear_cfg = bilinear_cfg or {}
 
         self.bn1 = nn.BatchNorm2d(in_channels)
 
@@ -28,7 +29,8 @@ class PreActBlock(nn.Module):
         if self.bilinear:
             self.bilinear_layer = Cb.Conv2d_bilinear(
                 out_channels, self.expansion * out_channels,
-                kernel_size=3, stride=1, padding=1, bias=whether_bias
+                kernel_size=3, stride=1, padding=1, bias=whether_bias,
+                **self.bilinear_cfg
             )
 
         if stride != 1 or in_channels != self.expansion * out_channels:
@@ -109,6 +111,14 @@ class PreActResNet(nn.Module):
         self.num_blocks = num_blocks
 
         self.data_channels = kwargs.get('c_in', 3)
+        self.bilinear_cfg = {
+            'sparsity_level': kwargs.get('bilinear_sparsity_level', 0.0),
+            'temporal_enabled': kwargs.get('st_dlif_enabled', False),
+            'temporal_gamma_init': kwargs.get('st_dlif_gamma_init', 0.0),
+            'temporal_beta_init': kwargs.get('st_dlif_beta_init', 0.0),
+            'temporal_activation': kwargs.get('st_dlif_activation', 'tanh'),
+            'detach_prev': kwargs.get('st_dlif_detach_prev', True),
+        }
         self.init_channels = 64
         self.conv1 = nn.Conv2d(self.data_channels, 64,
                                kernel_size=3, stride=1, padding=1, bias=False)
@@ -148,7 +158,7 @@ class PreActResNet(nn.Module):
         for s in strides:
             layers.append(
                 block(self.init_channels, out_channels, s, dropout,
-                    neuron, bilinear=bilinear, **kwargs)
+                    neuron, bilinear=bilinear, bilinear_cfg=self.bilinear_cfg, **kwargs)
             )
             self.init_channels = out_channels * block.expansion
         return nn.Sequential(*layers)

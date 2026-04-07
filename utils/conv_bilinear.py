@@ -178,7 +178,12 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
             bias: bool = True,
             padding_mode: str = 'zeros',
             step_mode: str = 's',
-            sparsity_level: float = 0.0
+            sparsity_level: float = 0.0,
+            temporal_enabled: bool = False,
+            temporal_gamma_init: float = 0.0,
+            temporal_beta_init: float = 0.0,
+            temporal_activation: str = 'tanh',
+            detach_prev: bool = True
     ) -> None:
         """
         双线性卷积层，支持 SpikingJelly 的 step_mode。
@@ -188,8 +193,18 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
 
         self.step_mode = step_mode
         self.sparsity_level = sparsity_level
+        self.temporal_enabled = temporal_enabled
+        self.detach_prev = detach_prev
 
         self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels , in_channels))
+        if self.temporal_enabled:
+            self.weight_temporal = nn.Parameter(torch.Tensor(out_channels, in_channels, in_channels))
+            self.temporal_gamma = nn.Parameter(torch.tensor(float(temporal_gamma_init)))
+            self.temporal_beta = nn.Parameter(torch.tensor(float(temporal_beta_init)))
+            if temporal_activation not in ('tanh', 'relu', 'identity'):
+                raise ValueError(f'Unsupported temporal_activation={temporal_activation}')
+            self.temporal_activation = temporal_activation
+            self.prev_input = None
         
         if bias:
             self.bias = nn.Parameter(torch.Tensor(out_channels))
@@ -213,6 +228,8 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
     
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=5**0.5)
+        if self.temporal_enabled:
+            nn.init.kaiming_uniform_(self.weight_temporal, a=5**0.5)
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / (fan_in**0.5)
@@ -221,6 +238,8 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         if hasattr(self, 'mask'):
             with torch.no_grad():
                 self.weight.data.mul_(self.mask)
+                if self.temporal_enabled:
+                    self.weight_temporal.data.mul_(self.mask)
 
     def extra_repr(self):
         return (f'{self.in_channels}, {self.out_channels}, '
@@ -233,19 +252,65 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         y = F.linear(qinput, masked_weight).reshape(input.size(0),input.size(2),input.size(3),self.out_channels).transpose(1,3).transpose(2,3)
         return y
 
+    def _outer_linear(self, x_cur: Tensor, x_ref: Tensor, weight: Tensor):
+        qinput = torch.bmm(
+            x_cur.transpose(1, 3).reshape(-1, self.in_channels).unsqueeze(-1),
+            x_ref.transpose(1, 3).reshape(-1, self.in_channels).unsqueeze(-2),
+        ).reshape(-1, self.in_channels ** 2)
+        masked_weight = (weight * self.mask).reshape(self.out_channels, -1)
+        y = F.linear(qinput, masked_weight).reshape(
+            x_cur.size(0), x_cur.size(2), x_cur.size(3), self.out_channels
+        ).transpose(1, 3).transpose(2, 3)
+        return y
+
+    def _temporal_phi(self, x: Tensor):
+        if self.temporal_activation == 'tanh':
+            return torch.tanh(x)
+        elif self.temporal_activation == 'relu':
+            return F.relu(x)
+        return x
+
+    def _core_forward_temporal(self, input: Tensor):
+        if self.prev_input is None:
+            prev = torch.zeros_like(input)
+        else:
+            prev = self.prev_input
+            if self.detach_prev:
+                prev = prev.detach()
+
+        y_spatial = self._outer_linear(input, input, self.weight)
+        y_temporal = self._outer_linear(input, prev, self.weight_temporal)
+        c = y_spatial + self.temporal_gamma * y_temporal
+        y = y_spatial + self.temporal_beta * self._temporal_phi(c)
+
+        self.prev_input = input
+        return y
+
+    def reset(self):
+        self.prev_input = None
+
     def forward(self, x: Tensor):
         # SpikingJelly 标准的 step_mode 处理逻辑
         if self.step_mode == 's':
             # 单步模式：输入 x 为 [N, C, H, W]
-            x = self._core_forward(x)
+            if self.temporal_enabled:
+                x = self._core_forward_temporal(x)
+            else:
+                x = self._core_forward(x)
 
         elif self.step_mode == 'm':
             # 多步模式：输入 x 为 [T, N, C, H, W]
             if x.dim() != 5:
                 raise ValueError(f'expected x with shape [T, N, C, H, W], but got x with shape {x.shape}!')
-            
-            # 使用 seq_to_ann_forward 将 T 和 N 合并后并行计算，速度最快
-            x = functional.seq_to_ann_forward(x, self._core_forward)
+
+            if self.temporal_enabled:
+                outs = []
+                for t in range(x.shape[0]):
+                    outs.append(self._core_forward_temporal(x[t]).unsqueeze(0))
+                x = torch.cat(outs, dim=0)
+            else:
+                # 使用 seq_to_ann_forward 将 T 和 N 合并后并行计算，速度最快
+                x = functional.seq_to_ann_forward(x, self._core_forward)
             
         return x
     
