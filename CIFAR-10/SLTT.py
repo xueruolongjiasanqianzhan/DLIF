@@ -9,8 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch.cuda import amp
-# from model import spiking_resnet_imagenet, spiking_resnet, spiking_vgg_bn
-from model import spiking_resnet
+# from model import spiking_resnet_imagenet
+from model import spiking_resnet, spiking_vgg_bn
 from utils import neuron
 import argparse
 from spikingjelly.clock_driven import functional
@@ -62,6 +62,15 @@ def main():
     parser.add_argument('-mse_n_reg', action='store_true', help='loss function setting')
     parser.add_argument('-loss_means', type=float, default=1.0, help='used in the loss function when mse_n_reg=False')
     parser.add_argument('-save_init', action='store_true', help='save the initialization of parameters')
+    parser.add_argument('-st_dlif_enabled', action='store_true', help='enable temporal ST-DLIF term in bilinear branch')
+    parser.add_argument('-st_dlif_gamma_init', type=float, default=0.0, help='initial gamma for cross-time bilinear term')
+    parser.add_argument('-st_dlif_beta_init', type=float, default=0.0, help='initial beta for motif event term')
+    parser.add_argument('-st_dlif_activation', type=str, default='tanh', choices=['tanh', 'relu', 'identity'],
+                        help='activation for motif event term')
+    parser.add_argument('-bilinear_sparsity_level', type=float, default=0.0, help='sparsity level for bilinear masks')
+    parser.add_argument('--no_st_dlif_detach_prev', dest='st_dlif_detach_prev', action='store_false',
+                        help='do not detach previous-step feature when computing temporal term')
+    parser.set_defaults(st_dlif_detach_prev=True)
 
     args = parser.parse_args()
     print(args)
@@ -184,7 +193,13 @@ def main():
 
     if args.dataset == 'cifar10' or args.dataset == 'cifar100':
         net = spiking_resnet.__dict__[args.model](neuron=neuron_model, num_classes=num_classes, neuron_dropout=args.drop_rate,
-                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1)
+                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1,
+                                                  st_dlif_enabled=args.st_dlif_enabled,
+                                                  st_dlif_gamma_init=args.st_dlif_gamma_init,
+                                                  st_dlif_beta_init=args.st_dlif_beta_init,
+                                                  st_dlif_activation=args.st_dlif_activation,
+                                                  st_dlif_detach_prev=args.st_dlif_detach_prev,
+                                                  bilinear_sparsity_level=args.bilinear_sparsity_level)
         print('using Resnet model.')
     elif args.dataset == 'imagenet':
         net = spiking_resnet_imagenet.__dict__[args.model](neuron=neuron_model, num_classes=num_classes, neuron_dropout=args.drop_rate,
@@ -192,7 +207,13 @@ def main():
         print('using NF-Resnet model.')
     elif args.dataset == 'DVSCIFAR10' or args.dataset == 'dvsgesture':
         net = spiking_vgg_bn.__dict__[args.model](neuron=neuron_model, num_classes=num_classes, neuron_dropout=args.drop_rate,
-                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1)
+                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1,
+                                                  st_dlif_enabled=args.st_dlif_enabled,
+                                                  st_dlif_gamma_init=args.st_dlif_gamma_init,
+                                                  st_dlif_beta_init=args.st_dlif_beta_init,
+                                                  st_dlif_activation=args.st_dlif_activation,
+                                                  st_dlif_detach_prev=args.st_dlif_detach_prev,
+                                                  bilinear_sparsity_level=args.bilinear_sparsity_level)
         print('using VGG model.')
     else:
         raise NotImplementedError
