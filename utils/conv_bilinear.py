@@ -228,7 +228,7 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
     
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=5**0.5)
-        if self.temporal_enabled:
+        if getattr(self, 'temporal_enabled', False) and hasattr(self, 'weight_temporal'):
             nn.init.kaiming_uniform_(self.weight_temporal, a=5**0.5)
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
@@ -238,7 +238,7 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         if hasattr(self, 'mask'):
             with torch.no_grad():
                 self.weight.data.mul_(self.mask)
-                if self.temporal_enabled:
+                if getattr(self, 'temporal_enabled', False) and hasattr(self, 'weight_temporal'):
                     self.weight_temporal.data.mul_(self.mask)
 
     def extra_repr(self):

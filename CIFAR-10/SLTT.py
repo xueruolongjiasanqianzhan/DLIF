@@ -9,8 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch.cuda import amp
-# from model import spiking_resnet_imagenet, spiking_resnet, spiking_vgg_bn
-from model import spiking_resnet
+# from model import spiking_resnet_imagenet
+from model import spiking_resnet, spiking_vgg_bn
 from utils import neuron
 import argparse
 from spikingjelly.clock_driven import functional
