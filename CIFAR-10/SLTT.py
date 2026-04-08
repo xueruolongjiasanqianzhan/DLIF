@@ -67,6 +67,8 @@ def main():
     parser.add_argument('-st_dlif_beta_init', type=float, default=0.0, help='initial beta for motif event term')
     parser.add_argument('-st_dlif_activation', type=str, default='tanh', choices=['tanh', 'relu', 'identity'],
                         help='activation for motif event term')
+    parser.add_argument('-st_dlif_mode', type=str, default='event', choices=['event', 'additive'],
+                        help='temporal fusion mode: event (current impl) or additive (pure sum path)')
     parser.add_argument('-bilinear_sparsity_level', type=float, default=0.0, help='sparsity level for bilinear masks')
     parser.add_argument('--no_st_dlif_detach_prev', dest='st_dlif_detach_prev', action='store_false',
                         help='do not detach previous-step feature when computing temporal term')
@@ -198,6 +200,7 @@ def main():
                                                   st_dlif_gamma_init=args.st_dlif_gamma_init,
                                                   st_dlif_beta_init=args.st_dlif_beta_init,
                                                   st_dlif_activation=args.st_dlif_activation,
+                                                  st_dlif_mode=args.st_dlif_mode,
                                                   st_dlif_detach_prev=args.st_dlif_detach_prev,
                                                   bilinear_sparsity_level=args.bilinear_sparsity_level)
         print('using Resnet model.')
@@ -212,6 +215,7 @@ def main():
                                                   st_dlif_gamma_init=args.st_dlif_gamma_init,
                                                   st_dlif_beta_init=args.st_dlif_beta_init,
                                                   st_dlif_activation=args.st_dlif_activation,
+                                                  st_dlif_mode=args.st_dlif_mode,
                                                   st_dlif_detach_prev=args.st_dlif_detach_prev,
                                                   bilinear_sparsity_level=args.bilinear_sparsity_level)
         print('using VGG model.')

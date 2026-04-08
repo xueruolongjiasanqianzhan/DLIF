@@ -117,6 +117,7 @@ class PreActResNet(nn.Module):
             'temporal_gamma_init': kwargs.get('st_dlif_gamma_init', 0.0),
             'temporal_beta_init': kwargs.get('st_dlif_beta_init', 0.0),
             'temporal_activation': kwargs.get('st_dlif_activation', 'tanh'),
+            'temporal_mode': kwargs.get('st_dlif_mode', 'event'),
             'detach_prev': kwargs.get('st_dlif_detach_prev', True),
         }
         self.init_channels = 64

@@ -183,6 +183,7 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
             temporal_gamma_init: float = 0.0,
             temporal_beta_init: float = 0.0,
             temporal_activation: str = 'tanh',
+            temporal_mode: str = 'event',
             detach_prev: bool = True
     ) -> None:
         """
@@ -204,6 +205,9 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
             if temporal_activation not in ('tanh', 'relu', 'identity'):
                 raise ValueError(f'Unsupported temporal_activation={temporal_activation}')
             self.temporal_activation = temporal_activation
+            if temporal_mode not in ('event', 'additive'):
+                raise ValueError(f'Unsupported temporal_mode={temporal_mode}')
+            self.temporal_mode = temporal_mode
             self.prev_input = None
         
         if bias:
@@ -281,7 +285,11 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         y_spatial = self._outer_linear(input, input, self.weight)
         y_temporal = self._outer_linear(input, prev, self.weight_temporal)
         c = y_spatial + self.temporal_gamma * y_temporal
-        y = y_spatial + self.temporal_beta * self._temporal_phi(c)
+        if self.temporal_mode == 'event':
+            y = y_spatial + self.temporal_beta * self._temporal_phi(c)
+        else:
+            # pure additive path: y_spatial + gamma * y_temporal
+            y = c
 
         self.prev_input = input
         return y
