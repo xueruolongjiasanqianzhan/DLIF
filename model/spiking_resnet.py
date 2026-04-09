@@ -115,6 +115,7 @@ class PreActResNet(nn.Module):
             'sparsity_level': kwargs.get('bilinear_sparsity_level', 0.0),
             'temporal_enabled': kwargs.get('st_dlif_enabled', False),
             'temporal_gamma_init': kwargs.get('st_dlif_gamma_init', 0.0),
+            'temporal_gamma_learnable': kwargs.get('st_dlif_gamma_learnable', False),
             'temporal_beta_init': kwargs.get('st_dlif_beta_init', 0.0),
             'temporal_activation': kwargs.get('st_dlif_activation', 'tanh'),
             'temporal_mode': kwargs.get('st_dlif_mode', 'event'),

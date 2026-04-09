@@ -181,6 +181,7 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
             sparsity_level: float = 0.0,
             temporal_enabled: bool = False,
             temporal_gamma_init: float = 0.0,
+            temporal_gamma_learnable: bool = False,
             temporal_beta_init: float = 0.0,
             temporal_activation: str = 'tanh',
             temporal_mode: str = 'event',
@@ -196,11 +197,15 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         self.sparsity_level = sparsity_level
         self.temporal_enabled = temporal_enabled
         self.detach_prev = detach_prev
+        self.temporal_gamma_learnable = temporal_gamma_learnable
 
         self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels , in_channels))
         if self.temporal_enabled:
             self.weight_temporal = nn.Parameter(torch.Tensor(out_channels, in_channels, in_channels))
-            self.temporal_gamma = nn.Parameter(torch.tensor(float(temporal_gamma_init)))
+            if self.temporal_gamma_learnable:
+                self.temporal_gamma = nn.Parameter(torch.tensor(float(temporal_gamma_init)))
+            else:
+                self.register_buffer('temporal_gamma', torch.tensor(float(temporal_gamma_init)))
             self.temporal_beta = nn.Parameter(torch.tensor(float(temporal_beta_init)))
             if temporal_activation not in ('tanh', 'relu', 'identity'):
                 raise ValueError(f'Unsupported temporal_activation={temporal_activation}')
@@ -220,12 +225,18 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         self.reset_parameters()
 
     def create_mask(self):
-        mask = (torch.rand(self.out_channels, self.in_channels, self.in_channels) > self.sparsity_level).float()
-        
+        # spatial mask (K_s): keep the previous design with zero diagonal
+        mask_spatial = (torch.rand(self.out_channels, self.in_channels, self.in_channels) > self.sparsity_level).float()
         for i in range(self.out_channels):
-            mask[i].fill_diagonal_(0)
-            
-        self.register_buffer('mask', mask)   
+            mask_spatial[i].fill_diagonal_(0)
+        self.register_buffer('mask_spatial', mask_spatial)
+        # backward compatibility alias used by legacy paths
+        self.register_buffer('mask', mask_spatial)
+
+        # temporal mask (K_t): independent mask, no forced zero diagonal
+        if self.temporal_enabled:
+            mask_temporal = (torch.rand(self.out_channels, self.in_channels, self.in_channels) > self.sparsity_level).float()
+            self.register_buffer('mask_temporal', mask_temporal)
 
     def extra_repr(self):
         return super().extra_repr() + f', step_mode={self.step_mode}'
@@ -241,9 +252,9 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
 
         if hasattr(self, 'mask'):
             with torch.no_grad():
-                self.weight.data.mul_(self.mask)
+                self.weight.data.mul_(self.mask_spatial)
                 if getattr(self, 'temporal_enabled', False) and hasattr(self, 'weight_temporal'):
-                    self.weight_temporal.data.mul_(self.mask)
+                    self.weight_temporal.data.mul_(self.mask_temporal)
 
     def extra_repr(self):
         return (f'{self.in_channels}, {self.out_channels}, '
@@ -256,12 +267,12 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         y = F.linear(qinput, masked_weight).reshape(input.size(0),input.size(2),input.size(3),self.out_channels).transpose(1,3).transpose(2,3)
         return y
 
-    def _outer_linear(self, x_cur: Tensor, x_ref: Tensor, weight: Tensor):
+    def _outer_linear(self, x_cur: Tensor, x_ref: Tensor, weight: Tensor, mask: Tensor):
         qinput = torch.bmm(
             x_cur.transpose(1, 3).reshape(-1, self.in_channels).unsqueeze(-1),
             x_ref.transpose(1, 3).reshape(-1, self.in_channels).unsqueeze(-2),
         ).reshape(-1, self.in_channels ** 2)
-        masked_weight = (weight * self.mask).reshape(self.out_channels, -1)
+        masked_weight = (weight * mask).reshape(self.out_channels, -1)
         y = F.linear(qinput, masked_weight).reshape(
             x_cur.size(0), x_cur.size(2), x_cur.size(3), self.out_channels
         ).transpose(1, 3).transpose(2, 3)
@@ -282,14 +293,14 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
             if self.detach_prev:
                 prev = prev.detach()
 
-        y_spatial = self._outer_linear(input, input, self.weight)
-        y_temporal = self._outer_linear(input, prev, self.weight_temporal)
-        c = y_spatial + self.temporal_gamma * y_temporal
+        y_spatial = self._outer_linear(input, input, self.weight, self.mask_spatial)
+        y_temporal = self._outer_linear(input, prev, self.weight_temporal, self.mask_temporal)
         if self.temporal_mode == 'event':
-            y = y_spatial + self.temporal_beta * self._temporal_phi(c)
+            # event-like path without c_t / beta: y_s + gamma * phi(y_tau)
+            y = y_spatial + self.temporal_gamma * self._temporal_phi(y_temporal)
         else:
             # pure additive path: y_spatial + gamma * y_temporal
-            y = c
+            y = y_spatial + self.temporal_gamma * y_temporal
 
         self.prev_input = input
         return y

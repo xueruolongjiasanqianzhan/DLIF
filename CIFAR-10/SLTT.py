@@ -64,7 +64,8 @@ def main():
     parser.add_argument('-save_init', action='store_true', help='save the initialization of parameters')
     parser.add_argument('-st_dlif_enabled', action='store_true', help='enable temporal ST-DLIF term in bilinear branch')
     parser.add_argument('-st_dlif_gamma_init', type=float, default=0.0, help='initial gamma for cross-time bilinear term')
-    parser.add_argument('-st_dlif_beta_init', type=float, default=0.0, help='initial beta for motif event term')
+    parser.add_argument('--st_dlif_gamma_learnable', action='store_true', help='make gamma learnable; default is fixed hyperparameter')
+    parser.add_argument('-st_dlif_beta_init', type=float, default=0.0, help='reserved compatibility argument (unused in current event/additive formulas)')
     parser.add_argument('-st_dlif_activation', type=str, default='tanh', choices=['tanh', 'relu', 'identity'],
                         help='activation for motif event term')
     parser.add_argument('-st_dlif_mode', type=str, default='event', choices=['event', 'additive'],
@@ -198,6 +199,7 @@ def main():
                                                   tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1,
                                                   st_dlif_enabled=args.st_dlif_enabled,
                                                   st_dlif_gamma_init=args.st_dlif_gamma_init,
+                                                  st_dlif_gamma_learnable=args.st_dlif_gamma_learnable,
                                                   st_dlif_beta_init=args.st_dlif_beta_init,
                                                   st_dlif_activation=args.st_dlif_activation,
                                                   st_dlif_mode=args.st_dlif_mode,
@@ -213,6 +215,7 @@ def main():
                                                   tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1,
                                                   st_dlif_enabled=args.st_dlif_enabled,
                                                   st_dlif_gamma_init=args.st_dlif_gamma_init,
+                                                  st_dlif_gamma_learnable=args.st_dlif_gamma_learnable,
                                                   st_dlif_beta_init=args.st_dlif_beta_init,
                                                   st_dlif_activation=args.st_dlif_activation,
                                                   st_dlif_mode=args.st_dlif_mode,
