@@ -16,6 +16,7 @@ SCRIPT_PATH="DVS-CIFAR10/SLTT.py"
 
 COMMON_ARGS=(
   # Paper-aligned fixed training setup (non-grid dimensions)
+  # CIFAR10-DVS appendix: SGD+momentum, 300 epochs, batch 128, lr cosine-to-zero, dropout 0.1, alpha(loss_lambda)=0.001
   -seed 1
   -dataset DVSCIFAR10
   -data_dir "$DATA_DIR"
@@ -23,7 +24,7 @@ COMMON_ARGS=(
   -surrogate triangle
   -T 10
   -tau 1.1
-  -b 32
+  -b 128
   -epochs 300
   -j 4
   -amp
@@ -33,8 +34,8 @@ COMMON_ARGS=(
   -lr_scheduler CosALR
   -T_max 300
   -weight_decay 0.0
-  -drop_rate 0.0
-  -loss_lambda 0.05
+  -drop_rate 0.1
+  -loss_lambda 0.001
   -st_dlif_enabled
   -st_dlif_activation tanh
 )
