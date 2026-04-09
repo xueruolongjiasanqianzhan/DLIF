@@ -298,8 +298,11 @@ def main():
         }
         torch.save(checkpoint, os.path.join(out_dir, 'checkpoint_0.pth'))
 
-    with open(os.path.join(out_dir, 'args.txt'), 'w', encoding='utf-8') as args_txt:
-        args_txt.write(str(args))
+    args_txt_path = os.path.join(out_dir, 'args.txt')
+    with open(args_txt_path, 'w', encoding='utf-8') as args_txt:
+        args_txt.write(str(args) + '\n')
+        args_txt.write('\n# epoch_results\n')
+        args_txt.write('epoch,train_loss,train_acc,test_loss,test_acc,max_test_acc\n')
 
     writer = SummaryWriter(os.path.join(out_dir, 'logs'), purge_step=start_epoch)
 
@@ -537,9 +540,15 @@ def main():
         torch.save(checkpoint, os.path.join(out_dir, 'checkpoint_latest.pth'))
 
         total_time = time.time() - start_time
+        with open(args_txt_path, 'a', encoding='utf-8') as args_txt:
+            args_txt.write(f'{epoch},{train_loss:.6f},{train_acc:.6f},{test_loss:.6f},{test_acc:.6f},{max_test_acc:.6f}\n')
+
         print(f'epoch={epoch}, train_loss={train_loss}, train_acc={train_acc}, test_loss={test_loss}, test_acc={test_acc}, max_test_acc={max_test_acc}, total_time={total_time}, escape_time={(datetime.datetime.now()+datetime.timedelta(seconds=total_time * (args.epochs - epoch))).strftime("%Y-%m-%d %H:%M:%S")}')
 
-        # print("after one epoch: %fGB" % (torch.cuda.max_memory_cached(0) / 1024 / 1024 / 1024))
+    with open(args_txt_path, 'a', encoding='utf-8') as args_txt:
+        args_txt.write(f'\n# final_best\nmax_test_acc={max_test_acc:.6f}\n')
+
+    # print("after one epoch: %fGB" % (torch.cuda.max_memory_cached(0) / 1024 / 1024 / 1024))
 
 if __name__ == '__main__':
     main()
