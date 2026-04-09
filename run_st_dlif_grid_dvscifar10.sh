@@ -15,9 +15,12 @@ BASE_OUT="${BASE_OUT:-./logs_grid_dvs_st}"
 SCRIPT_PATH="DVS-CIFAR10/SLTT.py"
 
 COMMON_ARGS=(
+  # Paper-aligned fixed training setup (non-grid dimensions)
+  -seed 1
   -dataset DVSCIFAR10
   -data_dir "$DATA_DIR"
   -model spiking_vgg11_bn
+  -surrogate triangle
   -T 10
   -tau 1.1
   -b 32
@@ -26,8 +29,12 @@ COMMON_ARGS=(
   -amp
   -opt SGD
   -lr 0.1
+  -momentum 0.9
   -lr_scheduler CosALR
   -T_max 200
+  -weight_decay 0.0
+  -drop_rate 0.0
+  -loss_lambda 0.05
   -st_dlif_enabled
   -st_dlif_activation tanh
 )
