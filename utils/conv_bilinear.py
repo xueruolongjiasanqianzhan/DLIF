@@ -332,6 +332,30 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
                 x = functional.seq_to_ann_forward(x, self._core_forward)
             
         return x
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        """
+        Backward compatibility for old checkpoints that only stored `mask`
+        (before introducing separate `mask_spatial` / `mask_temporal`).
+        """
+        key_mask = prefix + 'mask'
+        key_mask_spatial = prefix + 'mask_spatial'
+        key_mask_temporal = prefix + 'mask_temporal'
+
+        if key_mask_spatial not in state_dict and key_mask in state_dict:
+            state_dict[key_mask_spatial] = state_dict[key_mask].clone()
+
+        if self.temporal_enabled and key_mask_temporal not in state_dict:
+            if key_mask in state_dict:
+                state_dict[key_mask_temporal] = state_dict[key_mask].clone()
+            elif key_mask_spatial in state_dict:
+                state_dict[key_mask_temporal] = state_dict[key_mask_spatial].clone()
+
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs
+        )
     
 
 class Conv2d_bilinear_v(nn.Module):
