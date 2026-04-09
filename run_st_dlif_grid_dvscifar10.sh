@@ -24,14 +24,14 @@ COMMON_ARGS=(
   -T 10
   -tau 1.1
   -b 32
-  -epochs 200
+  -epochs 300
   -j 4
   -amp
   -opt SGD
   -lr 0.1
   -momentum 0.9
   -lr_scheduler CosALR
-  -T_max 200
+  -T_max 300
   -weight_decay 0.0
   -drop_rate 0.0
   -loss_lambda 0.05
