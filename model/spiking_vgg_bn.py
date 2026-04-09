@@ -44,9 +44,10 @@ class VGGConvBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels,
                  neuron: callable, dropout: float,
-                 bilinear: bool = False, **kwargs):
+                 bilinear: bool = False, bilinear_cfg: dict = None, **kwargs):
         super().__init__()
         self.bilinear = bilinear
+        self.bilinear_cfg = bilinear_cfg or {}
         whether_bias = True
 
         # 线性卷积
@@ -59,7 +60,8 @@ class VGGConvBlock(nn.Module):
         if self.bilinear:
             self.bilinear_layer = Cb.Conv2d_bilinear(
                 in_channels, out_channels,
-                kernel_size=3, padding=1, bias=whether_bias
+                kernel_size=3, padding=1, bias=whether_bias,
+                **self.bilinear_cfg
             )
 
         self.bn = nn.BatchNorm2d(out_channels)
@@ -87,6 +89,16 @@ class SpikingVGGBN(nn.Module):
         super(SpikingVGGBN, self).__init__()
         self.whether_bias = True
         self.init_channels = kwargs.get('c_in', 2)
+        self.bilinear_cfg = {
+            'sparsity_level': kwargs.get('bilinear_sparsity_level', 0.0),
+            'temporal_enabled': kwargs.get('st_dlif_enabled', False),
+            'temporal_gamma_init': kwargs.get('st_dlif_gamma_init', 0.0),
+            'temporal_gamma_learnable': kwargs.get('st_dlif_gamma_learnable', False),
+            'temporal_beta_init': kwargs.get('st_dlif_beta_init', 0.0),
+            'temporal_activation': kwargs.get('st_dlif_activation', 'tanh'),
+            'temporal_mode': kwargs.get('st_dlif_mode', 'event'),
+            'detach_prev': kwargs.get('st_dlif_detach_prev', True),
+        }
 
         self.layer1 = self._make_layers(cfg[vgg_name][0], dropout, neuron,
                                         bilinear=True,  **kwargs)
@@ -127,7 +139,7 @@ class SpikingVGGBN(nn.Module):
                 layers_list.append(
                     VGGConvBlock(self.init_channels, x,
                                  neuron=neuron, dropout=dropout,
-                                 bilinear=bilinear, **kwargs)
+                                 bilinear=bilinear, bilinear_cfg=self.bilinear_cfg, **kwargs)
                 )
                 self.init_channels = x
         return nn.Sequential(*layers_list)

@@ -61,6 +61,18 @@ def main():
     parser.add_argument('-mse_n_reg', action='store_true', help='loss function setting')
     parser.add_argument('-loss_means', type=float, default=1.0, help='used in the loss function when mse_n_reg=False')
     parser.add_argument('-save_init', action='store_true', help='save the initialization of parameters')
+    parser.add_argument('-st_dlif_enabled', action='store_true', help='enable temporal ST-DLIF term in bilinear branch')
+    parser.add_argument('-st_dlif_gamma_init', type=float, default=0.0, help='initial gamma for cross-time bilinear term')
+    parser.add_argument('--st_dlif_gamma_learnable', action='store_true', help='make gamma learnable; default is fixed hyperparameter')
+    parser.add_argument('-st_dlif_beta_init', type=float, default=0.0, help='reserved compatibility argument (unused in current event/additive formulas)')
+    parser.add_argument('-st_dlif_activation', type=str, default='tanh', choices=['tanh', 'relu', 'identity'],
+                        help='activation for motif event term')
+    parser.add_argument('-st_dlif_mode', type=str, default='event', choices=['event', 'additive'],
+                        help='temporal fusion mode: event (current impl) or additive (pure sum path)')
+    parser.add_argument('-bilinear_sparsity_level', type=float, default=0.0, help='sparsity level for bilinear masks')
+    parser.add_argument('--no_st_dlif_detach_prev', dest='st_dlif_detach_prev', action='store_false',
+                        help='do not detach previous-step feature when computing temporal term')
+    parser.set_defaults(st_dlif_detach_prev=True)
 
     args = parser.parse_args()
     print(args)
@@ -183,11 +195,27 @@ def main():
 
     if args.dataset == 'cifar10' or args.dataset == 'cifar100':
         net = spiking_resnet.__dict__[args.model](neuron=neuron_model, num_classes=num_classes, neuron_dropout=args.drop_rate,
-                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1)
+                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1,
+                                                  st_dlif_enabled=args.st_dlif_enabled,
+                                                  st_dlif_gamma_init=args.st_dlif_gamma_init,
+                                                  st_dlif_gamma_learnable=args.st_dlif_gamma_learnable,
+                                                  st_dlif_beta_init=args.st_dlif_beta_init,
+                                                  st_dlif_activation=args.st_dlif_activation,
+                                                  st_dlif_mode=args.st_dlif_mode,
+                                                  st_dlif_detach_prev=args.st_dlif_detach_prev,
+                                                  bilinear_sparsity_level=args.bilinear_sparsity_level)
         print('using Resnet model.')
     elif args.dataset == 'DVSCIFAR10' or args.dataset == 'dvsgesture':
         net = spiking_vgg_bn.__dict__[args.model](neuron=neuron_model, num_classes=num_classes, neuron_dropout=args.drop_rate,
-                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1)
+                                                  tau=args.tau, surrogate_function=surrogate_function, c_in=c_in, fc_hw=1,
+                                                  st_dlif_enabled=args.st_dlif_enabled,
+                                                  st_dlif_gamma_init=args.st_dlif_gamma_init,
+                                                  st_dlif_gamma_learnable=args.st_dlif_gamma_learnable,
+                                                  st_dlif_beta_init=args.st_dlif_beta_init,
+                                                  st_dlif_activation=args.st_dlif_activation,
+                                                  st_dlif_mode=args.st_dlif_mode,
+                                                  st_dlif_detach_prev=args.st_dlif_detach_prev,
+                                                  bilinear_sparsity_level=args.bilinear_sparsity_level)
         print('using VGG model.')
     else:
         raise NotImplementedError
@@ -270,8 +298,11 @@ def main():
         }
         torch.save(checkpoint, os.path.join(out_dir, 'checkpoint_0.pth'))
 
-    with open(os.path.join(out_dir, 'args.txt'), 'w', encoding='utf-8') as args_txt:
-        args_txt.write(str(args))
+    args_txt_path = os.path.join(out_dir, 'args.txt')
+    with open(args_txt_path, 'w', encoding='utf-8') as args_txt:
+        args_txt.write(str(args) + '\n')
+        args_txt.write('\n# epoch_results\n')
+        args_txt.write('epoch,train_loss,train_acc,test_loss,test_acc,max_test_acc\n')
 
     writer = SummaryWriter(os.path.join(out_dir, 'logs'), purge_step=start_epoch)
 
@@ -509,9 +540,15 @@ def main():
         torch.save(checkpoint, os.path.join(out_dir, 'checkpoint_latest.pth'))
 
         total_time = time.time() - start_time
+        with open(args_txt_path, 'a', encoding='utf-8') as args_txt:
+            args_txt.write(f'{epoch},{train_loss:.6f},{train_acc:.6f},{test_loss:.6f},{test_acc:.6f},{max_test_acc:.6f}\n')
+
         print(f'epoch={epoch}, train_loss={train_loss}, train_acc={train_acc}, test_loss={test_loss}, test_acc={test_acc}, max_test_acc={max_test_acc}, total_time={total_time}, escape_time={(datetime.datetime.now()+datetime.timedelta(seconds=total_time * (args.epochs - epoch))).strftime("%Y-%m-%d %H:%M:%S")}')
 
-        # print("after one epoch: %fGB" % (torch.cuda.max_memory_cached(0) / 1024 / 1024 / 1024))
+    with open(args_txt_path, 'a', encoding='utf-8') as args_txt:
+        args_txt.write(f'\n# final_best\nmax_test_acc={max_test_acc:.6f}\n')
+
+    # print("after one epoch: %fGB" % (torch.cuda.max_memory_cached(0) / 1024 / 1024 / 1024))
 
 if __name__ == '__main__':
     main()

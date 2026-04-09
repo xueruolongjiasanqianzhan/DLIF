@@ -178,7 +178,14 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
             bias: bool = True,
             padding_mode: str = 'zeros',
             step_mode: str = 's',
-            sparsity_level: float = 0.0
+            sparsity_level: float = 0.0,
+            temporal_enabled: bool = False,
+            temporal_gamma_init: float = 0.0,
+            temporal_gamma_learnable: bool = False,
+            temporal_beta_init: float = 0.0,
+            temporal_activation: str = 'tanh',
+            temporal_mode: str = 'event',
+            detach_prev: bool = True
     ) -> None:
         """
         双线性卷积层，支持 SpikingJelly 的 step_mode。
@@ -188,8 +195,25 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
 
         self.step_mode = step_mode
         self.sparsity_level = sparsity_level
+        self.temporal_enabled = temporal_enabled
+        self.detach_prev = detach_prev
+        self.temporal_gamma_learnable = temporal_gamma_learnable
 
         self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels , in_channels))
+        if self.temporal_enabled:
+            self.weight_temporal = nn.Parameter(torch.Tensor(out_channels, in_channels, in_channels))
+            if self.temporal_gamma_learnable:
+                self.temporal_gamma = nn.Parameter(torch.tensor(float(temporal_gamma_init)))
+            else:
+                self.register_buffer('temporal_gamma', torch.tensor(float(temporal_gamma_init)))
+            self.temporal_beta = nn.Parameter(torch.tensor(float(temporal_beta_init)))
+            if temporal_activation not in ('tanh', 'relu', 'identity'):
+                raise ValueError(f'Unsupported temporal_activation={temporal_activation}')
+            self.temporal_activation = temporal_activation
+            if temporal_mode not in ('event', 'additive'):
+                raise ValueError(f'Unsupported temporal_mode={temporal_mode}')
+            self.temporal_mode = temporal_mode
+            self.prev_input = None
         
         if bias:
             self.bias = nn.Parameter(torch.Tensor(out_channels))
@@ -201,18 +225,26 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         self.reset_parameters()
 
     def create_mask(self):
-        mask = (torch.rand(self.out_channels, self.in_channels, self.in_channels) > self.sparsity_level).float()
-        
+        # spatial mask (K_s): keep the previous design with zero diagonal
+        mask_spatial = (torch.rand(self.out_channels, self.in_channels, self.in_channels) > self.sparsity_level).float()
         for i in range(self.out_channels):
-            mask[i].fill_diagonal_(0)
-            
-        self.register_buffer('mask', mask)   
+            mask_spatial[i].fill_diagonal_(0)
+        self.register_buffer('mask_spatial', mask_spatial)
+        # backward compatibility alias used by legacy paths
+        self.register_buffer('mask', mask_spatial)
+
+        # temporal mask (K_t): independent mask, no forced zero diagonal
+        if self.temporal_enabled:
+            mask_temporal = (torch.rand(self.out_channels, self.in_channels, self.in_channels) > self.sparsity_level).float()
+            self.register_buffer('mask_temporal', mask_temporal)
 
     def extra_repr(self):
         return super().extra_repr() + f', step_mode={self.step_mode}'
     
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=5**0.5)
+        if getattr(self, 'temporal_enabled', False) and hasattr(self, 'weight_temporal'):
+            nn.init.kaiming_uniform_(self.weight_temporal, a=5**0.5)
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / (fan_in**0.5)
@@ -220,7 +252,9 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
 
         if hasattr(self, 'mask'):
             with torch.no_grad():
-                self.weight.data.mul_(self.mask)
+                self.weight.data.mul_(self.mask_spatial)
+                if getattr(self, 'temporal_enabled', False) and hasattr(self, 'weight_temporal'):
+                    self.weight_temporal.data.mul_(self.mask_temporal)
 
     def extra_repr(self):
         return (f'{self.in_channels}, {self.out_channels}, '
@@ -233,21 +267,95 @@ class Conv2d_bilinear(Conv2d, base.StepModule):
         y = F.linear(qinput, masked_weight).reshape(input.size(0),input.size(2),input.size(3),self.out_channels).transpose(1,3).transpose(2,3)
         return y
 
+    def _outer_linear(self, x_cur: Tensor, x_ref: Tensor, weight: Tensor, mask: Tensor):
+        qinput = torch.bmm(
+            x_cur.transpose(1, 3).reshape(-1, self.in_channels).unsqueeze(-1),
+            x_ref.transpose(1, 3).reshape(-1, self.in_channels).unsqueeze(-2),
+        ).reshape(-1, self.in_channels ** 2)
+        masked_weight = (weight * mask).reshape(self.out_channels, -1)
+        y = F.linear(qinput, masked_weight).reshape(
+            x_cur.size(0), x_cur.size(2), x_cur.size(3), self.out_channels
+        ).transpose(1, 3).transpose(2, 3)
+        return y
+
+    def _temporal_phi(self, x: Tensor):
+        if self.temporal_activation == 'tanh':
+            return torch.tanh(x)
+        elif self.temporal_activation == 'relu':
+            return F.relu(x)
+        return x
+
+    def _core_forward_temporal(self, input: Tensor):
+        if self.prev_input is None:
+            prev = torch.zeros_like(input)
+        else:
+            prev = self.prev_input
+            if self.detach_prev:
+                prev = prev.detach()
+
+        y_spatial = self._outer_linear(input, input, self.weight, self.mask_spatial)
+        y_temporal = self._outer_linear(input, prev, self.weight_temporal, self.mask_temporal)
+        if self.temporal_mode == 'event':
+            # event-like path without c_t / beta: y_s + gamma * phi(y_tau)
+            y = y_spatial + self.temporal_gamma * self._temporal_phi(y_temporal)
+        else:
+            # pure additive path: y_spatial + gamma * y_temporal
+            y = y_spatial + self.temporal_gamma * y_temporal
+
+        self.prev_input = input
+        return y
+
+    def reset(self):
+        self.prev_input = None
+
     def forward(self, x: Tensor):
         # SpikingJelly 标准的 step_mode 处理逻辑
         if self.step_mode == 's':
             # 单步模式：输入 x 为 [N, C, H, W]
-            x = self._core_forward(x)
+            if self.temporal_enabled:
+                x = self._core_forward_temporal(x)
+            else:
+                x = self._core_forward(x)
 
         elif self.step_mode == 'm':
             # 多步模式：输入 x 为 [T, N, C, H, W]
             if x.dim() != 5:
                 raise ValueError(f'expected x with shape [T, N, C, H, W], but got x with shape {x.shape}!')
-            
-            # 使用 seq_to_ann_forward 将 T 和 N 合并后并行计算，速度最快
-            x = functional.seq_to_ann_forward(x, self._core_forward)
+
+            if self.temporal_enabled:
+                outs = []
+                for t in range(x.shape[0]):
+                    outs.append(self._core_forward_temporal(x[t]).unsqueeze(0))
+                x = torch.cat(outs, dim=0)
+            else:
+                # 使用 seq_to_ann_forward 将 T 和 N 合并后并行计算，速度最快
+                x = functional.seq_to_ann_forward(x, self._core_forward)
             
         return x
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        """
+        Backward compatibility for old checkpoints that only stored `mask`
+        (before introducing separate `mask_spatial` / `mask_temporal`).
+        """
+        key_mask = prefix + 'mask'
+        key_mask_spatial = prefix + 'mask_spatial'
+        key_mask_temporal = prefix + 'mask_temporal'
+
+        if key_mask_spatial not in state_dict and key_mask in state_dict:
+            state_dict[key_mask_spatial] = state_dict[key_mask].clone()
+
+        if self.temporal_enabled and key_mask_temporal not in state_dict:
+            if key_mask in state_dict:
+                state_dict[key_mask_temporal] = state_dict[key_mask].clone()
+            elif key_mask_spatial in state_dict:
+                state_dict[key_mask_temporal] = state_dict[key_mask_spatial].clone()
+
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs
+        )
     
 
 class Conv2d_bilinear_v(nn.Module):
